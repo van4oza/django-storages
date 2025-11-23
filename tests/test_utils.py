@@ -220,3 +220,14 @@ class TestReadBytesWrapper(TestCase):
 
         # test read() returns fallback utf-8 encoding
         self.assertEqual(file_wrapped.read(), content.encode("utf-8"))
+
+    def test_string_stream_seek_and_tell_use_bytes(self):
+        file = io.StringIO("é")
+        file_wrapped = utils.ReadBytesWrapper(file)
+
+        file_wrapped.seek(0, io.SEEK_END)
+        self.assertEqual(len("é".encode("utf-8")), file_wrapped.tell())
+
+        file_wrapped.seek(0)
+        file_wrapped.seek(0, io.SEEK_END)
+        self.assertEqual(len("é".encode("utf-8")), file_wrapped.tell())

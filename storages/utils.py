@@ -1,3 +1,4 @@
+import io
 import os
 import pathlib
 import posixpath
@@ -167,16 +168,102 @@ class ReadBytesWrapper(FileProxyMixin):
         """
         self.file = file
         self._encoding = encoding or getattr(file, "encoding", None) or "utf-8"
+        self._buffer = None
+        self._setup_buffer()
+
+    def _setup_buffer(self):
+        sample = None
+        try:
+            sample = self.file.read(0)
+        except Exception:
+            pass
+
+        if isinstance(sample, bytes):
+            return
+
+        is_text_stream = isinstance(sample, str) or (
+            sample is None and getattr(self.file, "encoding", None) is not None
+        )
+
+        if not is_text_stream:
+            return
+
+        char_position = None
+        file_seekable = is_seekable(self.file)
+        if file_seekable:
+            try:
+                char_position = self.file.tell()
+            except Exception:
+                char_position = None
+
+        if file_seekable:
+            try:
+                self.file.seek(0)
+                content = self.file.read()
+                byte_content = (
+                    content.encode(self._encoding)
+                    if not isinstance(content, bytes)
+                    else content
+                )
+                self._buffer = io.BytesIO(byte_content)
+
+                if char_position is not None and isinstance(content, str):
+                    try:
+                        bom = "".encode(self._encoding)
+                    except Exception:
+                        bom = b""
+
+                    prefix_bytes = content[:char_position].encode(self._encoding)
+                    if bom and prefix_bytes.startswith(bom):
+                        prefix_bytes = prefix_bytes[len(bom) :]
+
+                    byte_offset = len(prefix_bytes)
+                    self._buffer.seek(byte_offset)
+
+                if char_position is not None:
+                    self.file.seek(char_position)
+                return
+            except Exception:
+                self._buffer = None
+                if char_position is not None:
+                    try:
+                        self.file.seek(char_position)
+                    except Exception:
+                        pass
+
+        try:
+            content = self.file.read()
+            if not isinstance(content, bytes):
+                content = content.encode(self._encoding)
+            self._buffer = io.BytesIO(content)
+        except Exception:
+            self._buffer = io.BytesIO()
 
     def read(self, *args, **kwargs):
-        content = self.file.read(*args, **kwargs)
+        if self._buffer is not None:
+            return self._buffer.read(*args, **kwargs)
 
+        content = self.file.read(*args, **kwargs)
         if not isinstance(content, bytes):
             content = content.encode(self._encoding)
         return content
 
+    def seek(self, *args, **kwargs):
+        if self._buffer is not None:
+            return self._buffer.seek(*args, **kwargs)
+        return self.file.seek(*args, **kwargs)
+
+    def tell(self):
+        if self._buffer is not None:
+            return self._buffer.tell()
+        return self.file.tell()
+
     def close(self):
-        self.file.close()
+        try:
+            if self._buffer is not None:
+                self._buffer.close()
+        finally:
+            self.file.close()
 
     def readable(self):
         return True
