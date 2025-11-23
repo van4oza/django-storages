@@ -188,56 +188,57 @@ class ReadBytesWrapper(FileProxyMixin):
         if not is_text_stream:
             return
 
-        char_position = None
-        file_seekable = is_seekable(self.file)
-        if file_seekable:
+        if isinstance(self.file, io.StringIO):
             try:
                 char_position = self.file.tell()
             except Exception:
                 char_position = None
 
-        if file_seekable:
-            try:
-                self.file.seek(0)
-                content = self.file.read()
-                byte_content = (
-                    content.encode(self._encoding)
-                    if not isinstance(content, bytes)
-                    else content
-                )
-                self._buffer = io.BytesIO(byte_content)
+            content = self.file.getvalue()
+            if not isinstance(content, bytes):
+                content = content.encode(self._encoding)
 
-                if char_position is not None and isinstance(content, str):
-                    try:
-                        bom = "".encode(self._encoding)
-                    except Exception:
-                        bom = b""
+            self._buffer = io.BytesIO(content)
 
-                    prefix_bytes = content[:char_position].encode(self._encoding)
-                    if bom and prefix_bytes.startswith(bom):
-                        prefix_bytes = prefix_bytes[len(bom) :]
+            if char_position is not None:
+                prefix = self.file.getvalue()[:char_position]
+                try:
+                    bom = "".encode(self._encoding)
+                except Exception:
+                    bom = b""
 
-                    byte_offset = len(prefix_bytes)
-                    self._buffer.seek(byte_offset)
+                prefix_bytes = prefix.encode(self._encoding)
+                if bom and prefix_bytes.startswith(bom):
+                    prefix_bytes = prefix_bytes[len(bom) :]
 
-                if char_position is not None:
-                    self.file.seek(char_position)
-                return
-            except Exception:
-                self._buffer = None
-                if char_position is not None:
-                    try:
-                        self.file.seek(char_position)
-                    except Exception:
-                        pass
+                self._buffer.seek(len(prefix_bytes))
+            return
+
+        file_seekable = is_seekable(self.file)
+        if not file_seekable:
+            return
 
         try:
+            char_position = self.file.tell()
+        except Exception:
+            return
+
+        if char_position not in (None, 0):
+            return
+
+        try:
+            self.file.seek(0)
             content = self.file.read()
             if not isinstance(content, bytes):
                 content = content.encode(self._encoding)
             self._buffer = io.BytesIO(content)
         except Exception:
-            self._buffer = io.BytesIO()
+            self._buffer = None
+        finally:
+            try:
+                self.file.seek(char_position or 0)
+            except Exception:
+                pass
 
     def read(self, *args, **kwargs):
         if self._buffer is not None:
